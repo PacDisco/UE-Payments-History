@@ -1,1 +1,10 @@
+# netlify.toml
+[build]
+  # No build step – just serve static + functions
+  command = ""
+  publish = "."
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
 
