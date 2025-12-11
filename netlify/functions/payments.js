@@ -34,14 +34,13 @@ exports.handler = async (event) => {
         return textResponse(404, "Could not find that program / deal.");
       }
 
-      // Attach email for Pay button
       deal.properties.email = email;
 
       const html = renderDealPortal(deal);
       return htmlResponse(200, html);
     }
 
-    // Otherwise we expect an email to start from
+    // Otherwise we expect an email
     if (!email) {
       return htmlResponse(
         400,
@@ -61,7 +60,7 @@ exports.handler = async (event) => {
           "No account found",
           `<p>We couldn't find any records for <strong>${escapeHtml(
             email
-          )}</strong>. Please double-check your email or contact our office.</p>`
+          )}</strong>.</p>`
         )
       );
     }
@@ -76,7 +75,7 @@ exports.handler = async (event) => {
           "No programs found",
           `<p>We found your contact (<strong>${escapeHtml(
             email
-          )}</strong>) but there are no associated program payment records yet.</p>`
+          )}</strong>) but no program payment records yet.</p>`
         )
       );
     }
@@ -89,7 +88,7 @@ exports.handler = async (event) => {
       return htmlResponse(200, html);
     }
 
-    // 3) Multiple deals → program selection page
+    // Multiple deals → show selection page
     const selectionHtml = renderDealSelectionPage(deals, url);
     return htmlResponse(200, selectionHtml);
   } catch (err) {
@@ -189,23 +188,24 @@ async function getDealById(dealId) {
   return { id: data.id, properties: data.properties || {} };
 }
 
-/* ----------------- Breadcrumb Renderer (Browser Back Button) ----------------- */
+/* ----------------- Back Button Renderer ----------------- */
 
-function renderBreadcrumbs({ showSelection }) {
+function renderBackLink() {
   return `
-    <nav class="breadcrumbs">
-      <a class="breadcrumb-home" href="javascript:window.history.back()">Home</a>
-      ${showSelection ? ` <span>/</span> <span>Select Program</span>` : ""}
-      <span>/</span> <span class="current">Payment Summary</span>
-    </nav>
+    <div style="margin-bottom:16px;">
+      <a href="javascript:window.history.back()" 
+         style="color:#4f46e5; font-size:0.9rem; text-decoration:none;">
+         ← Back
+      </a>
+    </div>
   `;
 }
 
-/* ----------------- Rendering helpers ----------------- */
+/* ----------------- Rendering: Deal Selection ----------------- */
 
 function renderDealSelectionPage(deals, currentUrl) {
   const baseUrl = new URL(currentUrl);
-  baseUrl.search = ""; // reset query params
+  baseUrl.search = "";
 
   const cards = deals
     .map((deal) => {
@@ -241,16 +241,18 @@ function renderDealSelectionPage(deals, currentUrl) {
     "Select a Program",
     `
     <div class="container">
-      ${renderBreadcrumbs({ showSelection: false })}
+      ${renderBackLink()}
 
       <h1>Select your program</h1>
-      <p>We found more than one active program associated with your account. Please choose which one you’d like to view.</p>
+      <p>More than one active program is associated with your account. Please choose which one you'd like to view.</p>
 
       <div class="program-grid">${cards}</div>
     </div>
   `
   );
 }
+
+/* ----------------- Rendering: Payment Summary ----------------- */
 
 function renderDealPortal(deal) {
   const p = deal.properties || {};
@@ -299,7 +301,7 @@ function renderDealPortal(deal) {
   const body = `
     <div class="container">
 
-      ${renderBreadcrumbs({ showSelection: true })}
+      ${renderBackLink()}
 
       <h1>${escapeHtml(programName)}</h1>
       <p class="subtitle">Payment overview for your program.</p>
@@ -389,23 +391,8 @@ function stripeStylePage(title, innerHtml) {
       border-radius: 16px;
       box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
     }
-
-    /* Breadcrumbs */
-    .breadcrumbs {
-      font-size: 0.85rem;
-      margin-bottom: 16px;
-      color: #6b7280;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .breadcrumbs a {
-      color: #4f46e5;
-      text-decoration: none;
-    }
-    .breadcrumbs .current {
-      color: #111827;
-      font-weight: 500;
+    a {
+      cursor: pointer;
     }
 
     h1 {
@@ -544,7 +531,7 @@ function stripeStylePage(title, innerHtml) {
 </html>`;
 }
 
-/* ----------------- Utility helpers ----------------- */
+/* ----------------- Utils ----------------- */
 
 function basicPage(title, contentHtml) {
   return stripeStylePage(
