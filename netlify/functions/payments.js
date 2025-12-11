@@ -10,11 +10,16 @@ const PAYMENT_FIELDS = [
   "payment_5",
 ];
 
+let contactEmailGlobal = null;
+
 exports.handler = async (event) => {
   try {
     const url = new URL(event.rawUrl);
     const email = url.searchParams.get("email");
     const dealId = url.searchParams.get("dealId");
+    const origin = url.searchParams.get("origin") || "";
+
+    contactEmailGlobal = email;
 
     if (!process.env.HUBSPOT_PRIVATE_APP_TOKEN) {
       return textResponse(
@@ -29,6 +34,11 @@ exports.handler = async (event) => {
       if (!deal) {
         return textResponse(404, "Could not find that program / deal.");
       }
+
+      // attach email + origin so breadcrumbs work
+      deal.properties.email = email;
+      deal.properties.origin = origin;
+
       const html = renderDealPortal(deal);
       return htmlResponse(200, html);
     }
@@ -74,14 +84,16 @@ exports.handler = async (event) => {
     }
 
     if (deals.length === 1) {
-      // Auto-show the only deal
       const deal = deals[0];
+      deal.properties.email = email;
+      deal.properties.origin = origin;
+
       const html = renderDealPortal(deal);
       return htmlResponse(200, html);
     }
 
     // 3) Multiple deals → show selection page
-    const selectionHtml = renderDealSelectionPage(deals, url);
+    const selectionHtml = renderDealSelectionPage(deals, url, origin);
     return htmlResponse(200, selectionHtml);
   } catch (err) {
     console.error(err);
@@ -141,7 +153,6 @@ async function findContactByEmail(email) {
 }
 
 async function getDealsForContact(contactId) {
-  // 1) Get associated deal IDs
   const assocData = await hubSpotFetch(
     `/crm/v4/objects/contacts/${contactId}/associations/deals`
   );
@@ -151,12 +162,11 @@ async function getDealsForContact(contactId) {
 
   if (dealIds.length === 0) return [];
 
-  // 2) Batch read deals with required properties
   const body = {
     properties: [
-      "dealname",            // program name
-      "amount",              // program fee
-      "total_amount_paid",   // total paid so far
+      "dealname",
+      "amount",
+      "total_amount_paid",
       ...PAYMENT_FIELDS,
     ],
     inputs: dealIds.map((id) => ({ id })),
@@ -170,7 +180,10 @@ async function getDealsForContact(contactId) {
   const deals =
     batch.results?.map((d) => ({
       id: d.id,
-      properties: d.properties || {},
+      properties: {
+        ...d.properties,
+        email: contactEmailGlobal, // carry through
+      },
     })) || [];
 
   return deals;
@@ -179,12 +192,7 @@ async function getDealsForContact(contactId) {
 async function getDealById(dealId) {
   const data = await hubSpotFetch(
     `/crm/v3/objects/deals/${dealId}?properties=${encodeURIComponent(
-      [
-        "dealname",
-        "amount",
-        "total_amount_paid",
-        ...PAYMENT_FIELDS,
-      ].join(",")
+      ["dealname", "amount", "total_amount_paid", ...PAYMENT_FIELDS].join(",")
     )}`
   );
 
@@ -195,11 +203,40 @@ async function getDealById(dealId) {
   };
 }
 
+/* ----------------- Breadcrumbs Renderer ----------------- */
+
+function renderBreadcrumbs({ email, origin, showSelection }) {
+  let homeUrl;
+
+  if (origin) {
+    homeUrl = origin; // send them back where they came from
+  } else {
+    const base = "/.netlify/functions/payments";
+    homeUrl = `${base}?email=${encodeURIComponent(email)}`;
+  }
+
+  const base = "/.netlify/functions/payments";
+  const selectUrl =
+    `${base}?email=${encodeURIComponent(email)}` +
+    (origin ? `&origin=${encodeURIComponent(origin)}` : "");
+
+  return `
+    <nav class="breadcrumbs">
+      <a href="${homeUrl}">Home</a>
+      ${
+        showSelection
+          ? ` <span>/</span> <a href="${selectUrl}">Select Program</a>`
+          : ""
+      }
+      <span>/</span> <span class="current">Payment Summary</span>
+    </nav>
+  `;
+}
+
 /* ----------------- Rendering helpers ----------------- */
 
-function renderDealSelectionPage(deals, currentUrl) {
+function renderDealSelectionPage(deals, currentUrl, origin) {
   const baseUrl = new URL(currentUrl);
-  // Keep only origin + function path, drop query
   baseUrl.search = "";
 
   const cards = deals
@@ -214,9 +251,10 @@ function renderDealSelectionPage(deals, currentUrl) {
             maximumFractionDigits: 2,
           })}`;
 
-      // Link back to this function with dealId
       const link = new URL(baseUrl.toString());
       link.searchParams.set("dealId", deal.id);
+      link.searchParams.set("email", p.email || "");
+      if (origin) link.searchParams.set("origin", origin);
 
       return `
       <a href="${link.toString()}" class="program-card">
@@ -236,8 +274,15 @@ function renderDealSelectionPage(deals, currentUrl) {
     "Select a Program",
     `
     <div class="container">
+      ${renderBreadcrumbs({
+        email: deals[0]?.properties?.email || "",
+        origin,
+        showSelection: false,
+      })}
+
       <h1>Select your program</h1>
       <p>We found more than one active program associated with your account. Please choose which one you’d like to view.</p>
+
       <div class="program-grid">
         ${cards}
       </div>
@@ -253,7 +298,6 @@ function renderDealPortal(deal) {
   const programFee = safeNumber(p.amount);
   const totalPaidFromField = safeNumber(p.total_amount_paid);
 
-  // Parse payment_* fields into rows
   const payments = [];
   PAYMENT_FIELDS.forEach((key) => {
     const raw = p[key];
@@ -270,37 +314,18 @@ function renderDealPortal(deal) {
     }
   });
 
-  // Compute total paid:
   let totalPaid = !isNaN(totalPaidFromField)
     ? totalPaidFromField
     : payments.reduce((sum, pay) => sum + (pay.amount || 0), 0);
 
-  // Compute remaining
   const remaining =
     !isNaN(programFee) && !isNaN(totalPaid)
       ? programFee - totalPaid
       : NaN;
 
-  const feeStr = !isNaN(programFee)
-    ? `$${programFee.toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`
-    : "—";
-
-  const paidStr = !isNaN(totalPaid)
-    ? `$${totalPaid.toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`
-    : "—";
-
-  const remainingStr = !isNaN(remaining)
-    ? `$${remaining.toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`
-    : "—";
+  const feeStr = formatCurrency(programFee);
+  const paidStr = formatCurrency(totalPaid);
+  const remainingStr = formatCurrency(remaining);
 
   const paymentRows =
     payments.length > 0
@@ -319,6 +344,13 @@ function renderDealPortal(deal) {
 
   const body = `
     <div class="container">
+
+      ${renderBreadcrumbs({
+        email: p.email || "",
+        origin: p.origin || "",
+        showSelection: true,
+      })}
+
       <h1>${escapeHtml(programName)}</h1>
       <p class="subtitle">Payment overview for your program.</p>
 
@@ -388,6 +420,25 @@ function stripeStylePage(title, innerHtml) {
       border-radius: 16px;
       box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
     }
+
+    /* Breadcrumbs */
+    .breadcrumbs {
+      font-size: 0.85rem;
+      margin-bottom: 16px;
+      color: #6b7280;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .breadcrumbs a {
+      color: #4f46e5;
+      text-decoration: none;
+    }
+    .breadcrumbs .current {
+      color: #111827;
+      font-weight: 500;
+    }
+
     h1 {
       margin: 0 0 4px;
       font-size: 1.5rem;
