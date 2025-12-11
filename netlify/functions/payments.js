@@ -17,7 +17,6 @@ exports.handler = async (event) => {
     const url = new URL(event.rawUrl);
     const email = url.searchParams.get("email");
     const dealId = url.searchParams.get("dealId");
-    const origin = url.searchParams.get("origin") || "";
 
     contactEmailGlobal = email;
 
@@ -35,9 +34,8 @@ exports.handler = async (event) => {
         return textResponse(404, "Could not find that program / deal.");
       }
 
-      // attach email + origin so breadcrumbs work
+      // attach email so Pay button works
       deal.properties.email = email;
-      deal.properties.origin = origin;
 
       const html = renderDealPortal(deal);
       return htmlResponse(200, html);
@@ -86,14 +84,13 @@ exports.handler = async (event) => {
     if (deals.length === 1) {
       const deal = deals[0];
       deal.properties.email = email;
-      deal.properties.origin = origin;
 
       const html = renderDealPortal(deal);
       return htmlResponse(200, html);
     }
 
     // 3) Multiple deals → show selection page
-    const selectionHtml = renderDealSelectionPage(deals, url, origin);
+    const selectionHtml = renderDealSelectionPage(deals, url);
     return htmlResponse(200, selectionHtml);
   } catch (err) {
     console.error(err);
@@ -177,16 +174,15 @@ async function getDealsForContact(contactId) {
     body: JSON.stringify(body),
   });
 
-  const deals =
+  return (
     batch.results?.map((d) => ({
       id: d.id,
       properties: {
         ...d.properties,
-        email: contactEmailGlobal, // carry through
+        email: contactEmailGlobal,
       },
-    })) || [];
-
-  return deals;
+    })) || []
+  );
 }
 
 async function getDealById(dealId) {
@@ -205,37 +201,33 @@ async function getDealById(dealId) {
 
 /* ----------------- Breadcrumbs Renderer ----------------- */
 
-function renderBreadcrumbs({ email, origin, showSelection }) {
-  let homeUrl;
-
-  if (origin) {
-    homeUrl = origin; // send them back where they came from
-  } else {
-    const base = "/.netlify/functions/payments";
-    homeUrl = `${base}?email=${encodeURIComponent(email)}`;
-  }
-
-  const base = "/.netlify/functions/payments";
-  const selectUrl =
-    `${base}?email=${encodeURIComponent(email)}` +
-    (origin ? `&origin=${encodeURIComponent(origin)}` : "");
-
+function renderBreadcrumbs({ showSelection }) {
   return `
     <nav class="breadcrumbs">
-      <a href="${homeUrl}">Home</a>
+      <a class="breadcrumb-home" href="#">Home</a>
       ${
         showSelection
-          ? ` <span>/</span> <a href="${selectUrl}">Select Program</a>`
+          ? ` <span>/</span> <span>Select Program</span>`
           : ""
       }
       <span>/</span> <span class="current">Payment Summary</span>
     </nav>
+
+    <script>
+      // Automatically set Home link to the referring page
+      const ref = document.referrer;
+      if (ref) {
+        document.querySelectorAll(".breadcrumb-home").forEach(el => {
+          el.href = ref;
+        });
+      }
+    </script>
   `;
 }
 
 /* ----------------- Rendering helpers ----------------- */
 
-function renderDealSelectionPage(deals, currentUrl, origin) {
+function renderDealSelectionPage(deals, currentUrl) {
   const baseUrl = new URL(currentUrl);
   baseUrl.search = "";
 
@@ -254,7 +246,6 @@ function renderDealSelectionPage(deals, currentUrl, origin) {
       const link = new URL(baseUrl.toString());
       link.searchParams.set("dealId", deal.id);
       link.searchParams.set("email", p.email || "");
-      if (origin) link.searchParams.set("origin", origin);
 
       return `
       <a href="${link.toString()}" class="program-card">
@@ -274,11 +265,7 @@ function renderDealSelectionPage(deals, currentUrl, origin) {
     "Select a Program",
     `
     <div class="container">
-      ${renderBreadcrumbs({
-        email: deals[0]?.properties?.email || "",
-        origin,
-        showSelection: false,
-      })}
+      ${renderBreadcrumbs({ showSelection: false })}
 
       <h1>Select your program</h1>
       <p>We found more than one active program associated with your account. Please choose which one you’d like to view.</p>
@@ -314,7 +301,7 @@ function renderDealPortal(deal) {
     }
   });
 
-  let totalPaid = !isNaN(totalPaidFromField)
+  const totalPaid = !isNaN(totalPaidFromField)
     ? totalPaidFromField
     : payments.reduce((sum, pay) => sum + (pay.amount || 0), 0);
 
@@ -345,11 +332,7 @@ function renderDealPortal(deal) {
   const body = `
     <div class="container">
 
-      ${renderBreadcrumbs({
-        email: p.email || "",
-        origin: p.origin || "",
-        showSelection: true,
-      })}
+      ${renderBreadcrumbs({ showSelection: true })}
 
       <h1>${escapeHtml(programName)}</h1>
       <p class="subtitle">Payment overview for your program.</p>
@@ -367,6 +350,27 @@ function renderDealPortal(deal) {
           <div class="label">Remaining balance</div>
           <div class="value">${remainingStr}</div>
         </div>
+      </div>
+
+      <!-- PAY BALANCE BUTTON -->
+      <div style="margin: 20px 0 28px;">
+        <a 
+          href="https://unearthededucation.org/pages/payments?amount=${encodeURIComponent(
+            remaining
+          )}&email=${encodeURIComponent(p.email || "")}"
+          style="
+            display:inline-block;
+            padding:12px 20px;
+            background:#4f46e5;
+            color:white;
+            text-decoration:none;
+            border-radius:8px;
+            font-weight:600;
+            font-size:0.95rem;
+          "
+        >
+          Pay Remaining Balance
+        </a>
       </div>
 
       <div class="section">
@@ -392,7 +396,7 @@ function renderDealPortal(deal) {
   return stripeStylePage("Payment Summary", body);
 }
 
-/* ----------------- HTML shells & helpers ----------------- */
+/* ----------------- HTML wrappers ----------------- */
 
 function stripeStylePage(title, innerHtml) {
   return `<!DOCTYPE html>
