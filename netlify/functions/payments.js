@@ -34,7 +34,7 @@ exports.handler = async (event) => {
         return textResponse(404, "Could not find that program / deal.");
       }
 
-      // attach email so Pay button works
+      // Attach email for Pay button
       deal.properties.email = email;
 
       const html = renderDealPortal(deal);
@@ -89,7 +89,7 @@ exports.handler = async (event) => {
       return htmlResponse(200, html);
     }
 
-    // 3) Multiple deals → show selection page
+    // 3) Multiple deals → program selection page
     const selectionHtml = renderDealSelectionPage(deals, url);
     return htmlResponse(200, selectionHtml);
   } catch (err) {
@@ -123,13 +123,7 @@ async function findContactByEmail(email) {
   const body = {
     filterGroups: [
       {
-        filters: [
-          {
-            propertyName: "email",
-            operator: "EQ",
-            value: email,
-          },
-        ],
+        filters: [{ propertyName: "email", operator: "EQ", value: email }],
       },
     ],
     properties: ["email", "firstname", "lastname"],
@@ -142,11 +136,9 @@ async function findContactByEmail(email) {
   });
 
   if (!data.results || data.results.length === 0) return null;
+
   const contact = data.results[0];
-  return {
-    id: contact.id,
-    properties: contact.properties || {},
-  };
+  return { id: contact.id, properties: contact.properties || {} };
 }
 
 async function getDealsForContact(contactId) {
@@ -193,35 +185,19 @@ async function getDealById(dealId) {
   );
 
   if (!data || !data.id) return null;
-  return {
-    id: data.id,
-    properties: data.properties || {},
-  };
+
+  return { id: data.id, properties: data.properties || {} };
 }
 
-/* ----------------- Breadcrumbs Renderer ----------------- */
+/* ----------------- Breadcrumb Renderer (Browser Back Button) ----------------- */
 
 function renderBreadcrumbs({ showSelection }) {
   return `
     <nav class="breadcrumbs">
-      <a class="breadcrumb-home" href="#">Home</a>
-      ${
-        showSelection
-          ? ` <span>/</span> <span>Select Program</span>`
-          : ""
-      }
+      <a class="breadcrumb-home" href="javascript:window.history.back()">Home</a>
+      ${showSelection ? ` <span>/</span> <span>Select Program</span>` : ""}
       <span>/</span> <span class="current">Payment Summary</span>
     </nav>
-
-    <script>
-      // Automatically set Home link to the referring page
-      const ref = document.referrer;
-      if (ref) {
-        document.querySelectorAll(".breadcrumb-home").forEach(el => {
-          el.href = ref;
-        });
-      }
-    </script>
   `;
 }
 
@@ -229,12 +205,13 @@ function renderBreadcrumbs({ showSelection }) {
 
 function renderDealSelectionPage(deals, currentUrl) {
   const baseUrl = new URL(currentUrl);
-  baseUrl.search = "";
+  baseUrl.search = ""; // reset query params
 
   const cards = deals
     .map((deal) => {
       const p = deal.properties || {};
       const name = p.dealname || "Program";
+
       const amount = safeNumber(p.amount);
       const amountStr = isNaN(amount)
         ? ""
@@ -256,8 +233,7 @@ function renderDealSelectionPage(deals, currentUrl) {
             : ""
         }
         <div class="program-view">View payments →</div>
-      </a>
-    `;
+      </a>`;
     })
     .join("");
 
@@ -270,9 +246,7 @@ function renderDealSelectionPage(deals, currentUrl) {
       <h1>Select your program</h1>
       <p>We found more than one active program associated with your account. Please choose which one you’d like to view.</p>
 
-      <div class="program-grid">
-        ${cards}
-      </div>
+      <div class="program-grid">${cards}</div>
     </div>
   `
   );
@@ -286,9 +260,11 @@ function renderDealPortal(deal) {
   const totalPaidFromField = safeNumber(p.total_amount_paid);
 
   const payments = [];
+
   PAYMENT_FIELDS.forEach((key) => {
     const raw = p[key];
     if (!raw) return;
+
     const parts = raw.split(",").map((s) => s.trim());
     if (!parts[0]) return;
 
@@ -296,35 +272,26 @@ function renderDealPortal(deal) {
     const txn = parts[1] || "";
     const date = parts[2] || "";
 
-    if (!isNaN(amount)) {
-      payments.push({ amount, txn, date });
-    }
+    if (!isNaN(amount)) payments.push({ amount, txn, date });
   });
 
   const totalPaid = !isNaN(totalPaidFromField)
     ? totalPaidFromField
-    : payments.reduce((sum, pay) => sum + (pay.amount || 0), 0);
+    : payments.reduce((sum, pay) => sum + pay.amount, 0);
 
   const remaining =
-    !isNaN(programFee) && !isNaN(totalPaid)
-      ? programFee - totalPaid
-      : NaN;
-
-  const feeStr = formatCurrency(programFee);
-  const paidStr = formatCurrency(totalPaid);
-  const remainingStr = formatCurrency(remaining);
+    !isNaN(programFee) && !isNaN(totalPaid) ? programFee - totalPaid : NaN;
 
   const paymentRows =
     payments.length > 0
       ? payments
           .map(
             (pay) => `
-        <tr>
-          <td>${formatCurrency(pay.amount)}</td>
-          <td>${escapeHtml(pay.date || "")}</td>
-          <td class="mono">${escapeHtml(pay.txn || "")}</td>
-        </tr>
-      `
+      <tr>
+        <td>${formatCurrency(pay.amount)}</td>
+        <td>${escapeHtml(pay.date || "")}</td>
+        <td class="mono">${escapeHtml(pay.txn || "")}</td>
+      </tr>`
           )
           .join("")
       : `<tr><td colspan="3" class="empty-row">No payments have been recorded yet.</td></tr>`;
@@ -340,15 +307,15 @@ function renderDealPortal(deal) {
       <div class="summary-grid">
         <div class="summary-card">
           <div class="label">Program fee</div>
-          <div class="value">${feeStr}</div>
+          <div class="value">${formatCurrency(programFee)}</div>
         </div>
         <div class="summary-card">
           <div class="label">Paid so far</div>
-          <div class="value">${paidStr}</div>
+          <div class="value">${formatCurrency(totalPaid)}</div>
         </div>
         <div class="summary-card highlight">
           <div class="label">Remaining balance</div>
-          <div class="value">${remainingStr}</div>
+          <div class="value">${formatCurrency(remaining)}</div>
         </div>
       </div>
 
@@ -384,9 +351,7 @@ function renderDealPortal(deal) {
                 <th>Transaction ID</th>
               </tr>
             </thead>
-            <tbody>
-              ${paymentRows}
-            </tbody>
+            <tbody>${paymentRows}</tbody>
           </table>
         </div>
       </div>
@@ -396,7 +361,7 @@ function renderDealPortal(deal) {
   return stripeStylePage("Payment Summary", body);
 }
 
-/* ----------------- HTML wrappers ----------------- */
+/* ----------------- HTML Shell ----------------- */
 
 function stripeStylePage(title, innerHtml) {
   return `<!DOCTYPE html>
@@ -460,22 +425,26 @@ function stripeStylePage(title, innerHtml) {
       color: #6b7280;
       font-size: 0.9rem;
     }
+
     .summary-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
       gap: 12px;
       margin-bottom: 24px;
     }
+
     .summary-card {
       padding: 14px 16px;
       border-radius: 12px;
       border: 1px solid #e5e7eb;
       background: linear-gradient(to bottom right, #ffffff, #f9fafb);
     }
+
     .summary-card.highlight {
       border-color: #4f46e5;
       background: radial-gradient(circle at top left, #eef2ff, #f9fafb);
     }
+
     .label {
       font-size: 0.75rem;
       text-transform: uppercase;
@@ -483,33 +452,36 @@ function stripeStylePage(title, innerHtml) {
       color: #6b7280;
       margin-bottom: 4px;
     }
+
     .value {
       font-size: 1.1rem;
       font-weight: 600;
       color: #111827;
     }
-    .section {
-      margin-top: 12px;
-    }
+
     .table-wrapper {
       border-radius: 12px;
       border: 1px solid #e5e7eb;
       overflow: hidden;
       background: #ffffff;
     }
+
     table {
       width: 100%;
       border-collapse: collapse;
       font-size: 0.9rem;
     }
+
     thead {
       background: #f9fafb;
     }
+
     th, td {
       padding: 10px 12px;
       border-bottom: 1px solid #e5e7eb;
       text-align: left;
     }
+
     th {
       font-weight: 500;
       color: #4b5563;
@@ -517,25 +489,29 @@ function stripeStylePage(title, innerHtml) {
       text-transform: uppercase;
       letter-spacing: 0.06em;
     }
+
     tbody tr:last-child td {
       border-bottom: none;
     }
+
     .empty-row {
       text-align: center;
       color: #9ca3af;
       font-style: italic;
     }
+
     .mono {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
         "Liberation Mono", "Courier New", monospace;
       font-size: 0.8rem;
     }
+
     .program-grid {
       display: grid;
       grid-template-columns: 1fr;
       gap: 12px;
-      margin-top: 16px;
     }
+
     .program-card {
       display: block;
       padding: 14px 16px;
@@ -547,25 +523,13 @@ function stripeStylePage(title, innerHtml) {
       transition: box-shadow 0.15s ease, transform 0.15s ease,
         border-color 0.15s ease;
     }
+
     .program-card:hover {
       transform: translateY(-1px);
       border-color: #4f46e5;
       box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
     }
-    .program-name {
-      font-weight: 600;
-      margin-bottom: 4px;
-    }
-    .program-amount {
-      font-size: 0.85rem;
-      color: #6b7280;
-      margin-bottom: 8px;
-    }
-    .program-view {
-      font-size: 0.8rem;
-      color: #4f46e5;
-      font-weight: 500;
-    }
+
     @media (max-width: 640px) {
       .container {
         margin: 16px;
@@ -579,6 +543,8 @@ function stripeStylePage(title, innerHtml) {
 </body>
 </html>`;
 }
+
+/* ----------------- Utility helpers ----------------- */
 
 function basicPage(title, contentHtml) {
   return stripeStylePage(
